@@ -9,14 +9,16 @@ import java.util.List;
 import java.util.Optional;
 import java.util.function.Function;
 
+import javax.json.Json;
+import javax.json.JsonObject;
+import javax.json.JsonObjectBuilder;
+
 import org.csstudio.utility.esclient.ElasticsearchClient;
 import org.csstudio.utility.esclient.ScrollSettings;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.core.runtime.jobs.Job;
-import org.json.JSONException;
-import org.json.JSONObject;
 
 /**
  *
@@ -33,7 +35,7 @@ public class ElasticsearchModel<T extends LogMessage> extends ArchiveModel<T>
     protected final String dateField;
     protected String mapping;
     protected final String server;
-    protected Function<JSONObject, T> parser;
+    protected Function<JsonObject, T> parser;
 
     protected Job queryJob;
     protected Class<T> parameterType;
@@ -42,7 +44,7 @@ public class ElasticsearchModel<T extends LogMessage> extends ArchiveModel<T>
 
     @SuppressWarnings("unchecked")
     public ElasticsearchModel(String server, String mapping, String dateField,
-            Function<JSONObject, T> parser)
+            Function<JsonObject, T> parser)
     {
         Activator.checkParameterString(dateField, "dateField"); //$NON-NLS-1$
         Activator.checkParameterString(server, "server"); //$NON-NLS-1$
@@ -63,17 +65,15 @@ public class ElasticsearchModel<T extends LogMessage> extends ArchiveModel<T>
      * results is implemented. Override to change the query.
      */
     @SuppressWarnings("nls")
-    protected JSONObject buildQuery(Instant from, Instant to, long maxResults)
-            throws JSONException
+    protected JsonObject buildQuery(Instant from, Instant to, long maxResults)
     {
-        JSONObject request = new JSONObject();
-        JSONObject query = new JSONObject();
-        request.put("query", query);
+        var request = Json.createObjectBuilder();
+        var query = Json.createObjectBuilder();
 
-        JSONObject bool = new JSONObject();
-        List<JSONObject> conditions = new LinkedList<>();
-        List<JSONObject> not_conditions = new LinkedList<>();
-        query.put("bool", bool);
+        var bool = Json.createObjectBuilder();
+        var conditions = Json.createArrayBuilder();
+        var not_conditions = Json.createArrayBuilder();
+        boolean not_conditions_empty = true;
         conditions.add(getTimeQuery(from, to));
         synchronized (this)
         {
@@ -84,6 +84,7 @@ public class ElasticsearchModel<T extends LogMessage> extends ArchiveModel<T>
                     if (filter.isInverted())
                     {
                         not_conditions.add(getFilter(filter));
+                        not_conditions_empty = false;
                     }
                     else
                     {
@@ -92,29 +93,32 @@ public class ElasticsearchModel<T extends LogMessage> extends ArchiveModel<T>
                 }
             }
         }
-        bool.put("filter", conditions);
-        if (!not_conditions.isEmpty())
+        bool.add("filter", conditions);
+        if (!not_conditions_empty)
         {
-            bool.put("must_not", not_conditions);
+            bool.add("must_not", not_conditions);
         }
+        query.add("bool", bool);
 
         if (0 >= maxResults)
         {
             // if we want all results, we can use the fastest possible sort in
             // the database.
-            request.put("sort", "_doc");
+            request.add("sort", "_doc");
         }
         else
         {
             // however, if we need only the latest n results, we have to sort by
             // date.
-            request.put("sort", new JSONObject().put(this.dateField, "desc"));
-            request.put("size", maxResults);
+            request.add("sort",
+                    Json.createObjectBuilder().add(this.dateField, "desc"));
+            request.add("size", maxResults);
         }
-        return request;
+        request.add("query", query);
+        return request.build();
     }
 
-    protected JSONObject getFilter(PropertyFilter filter)
+    protected JsonObjectBuilder getFilter(PropertyFilter filter)
     {
         if (filter instanceof StringPropertyFilter)
         {
@@ -128,31 +132,23 @@ public class ElasticsearchModel<T extends LogMessage> extends ArchiveModel<T>
     }
 
     @SuppressWarnings("nls")
-    protected JSONObject getFilterQuery(StringPropertyFilter filter)
+    protected JsonObjectBuilder getFilterQuery(StringPropertyFilter filter)
     {
-        try
-        {
-            return new JSONObject().put("match", new JSONObject()
-                    .put(filter.getProperty(), filter.getPattern()));
-        }
-        catch (JSONException ex)
-        {
-            return null;
-        }
+        return Json.createObjectBuilder().add("match",
+                Json.createObjectBuilder().add(filter.getProperty(),
+                        filter.getPattern()));
     }
 
     @SuppressWarnings("nls")
-    protected JSONObject getFilterQuery(StringPropertyMultiFilter filter)
+    protected JsonObjectBuilder getFilterQuery(StringPropertyMultiFilter filter)
     {
-        try
+        var terms = Json.createArrayBuilder();
+        for (var f : filter.getPatterns())
         {
-            return new JSONObject().put("terms", new JSONObject()
-                    .accumulate(filter.getProperty(), filter.getPatterns()));
+            terms.add(f);
         }
-        catch (JSONException ex)
-        {
-            return null;
-        }
+        return Json.createObjectBuilder().add("terms",
+                Json.createObjectBuilder().add(filter.getProperty(), terms));
     }
 
     @SuppressWarnings("unchecked")
@@ -178,15 +174,14 @@ public class ElasticsearchModel<T extends LogMessage> extends ArchiveModel<T>
      * millis since the epoch. E.g. if the time zone information is missing…
      */
     @SuppressWarnings("nls")
-    protected JSONObject getTimeQuery(Instant from, Instant to)
-            throws JSONException
+    protected JsonObjectBuilder getTimeQuery(Instant from, Instant to)
     {
-        JSONObject timematch = new JSONObject();
-        timematch.put("gte", from.toEpochMilli());
-        timematch.put("lte", to.toEpochMilli());
-        timematch.put("format", "epoch_millis");
-        return new JSONObject().put("range",
-                new JSONObject().put(this.dateField, timematch));
+        var timematch = Json.createObjectBuilder();
+        timematch.add("gte", from.toEpochMilli());
+        timematch.add("lte", to.toEpochMilli());
+        timematch.add("format", "epoch_millis");
+        return Json.createObjectBuilder().add("range",
+                Json.createObjectBuilder().add(this.dateField, timematch));
     }
 
     @Override
@@ -213,30 +208,29 @@ public class ElasticsearchModel<T extends LogMessage> extends ArchiveModel<T>
                         ss = new ScrollSettings("1m", //$NON-NLS-1$
                                 ElasticsearchModel.PAGE_SIZE);
                     }
-                    try
+                    // try
+                    // {
+                    ElasticsearchClient client = new ElasticsearchClient(
+                            ElasticsearchModel.this.server, hit -> {
+                                Optional.ofNullable(
+                                        ElasticsearchModel.this.parser
+                                                .apply(hit))
+                                        .ifPresent(result::add);
+                                return !monitor.isCanceled();
+                            });
+                    client.setScrollSettings(ss);
+                    JsonObject query = buildQuery(from, to, maxResults);
+                    client.executeQuery(ElasticsearchModel.this.mapping, query);
+                    if (0 >= maxResults)
                     {
-                        ElasticsearchClient client = new ElasticsearchClient(
-                                ElasticsearchModel.this.server, hit -> {
-                                    Optional.ofNullable(
-                                            ElasticsearchModel.this.parser
-                                                    .apply(hit))
-                                            .ifPresent(result::add);
-                                    return !monitor.isCanceled();
-                                });
-                        client.setScrollSettings(ss);
-                        JSONObject query = buildQuery(from, to, maxResults);
-                        client.executeQuery(ElasticsearchModel.this.mapping,
-                                query);
-                        if (0 >= maxResults)
-                        {
-                            Collections.sort(result);
-                        }
+                        Collections.sort(result);
                     }
-                    catch (JSONException e)
-                    {
-                        // TODO Auto-generated catch block
-                        e.printStackTrace();
-                    }
+                    // }
+                    // catch (JSONException e)
+                    // {
+                    // // TODO Auto-generated catch block
+                    // e.printStackTrace();
+                    // }
                     synchronized (ElasticsearchModel.this)
                     {
                         ElasticsearchModel.this.messages = result;

@@ -11,6 +11,7 @@ import java.util.Set;
 
 import javax.jms.JMSException;
 import javax.jms.MapMessage;
+import javax.json.JsonObject;
 
 import org.csstudio.apputil.time.SecondsParser;
 import org.csstudio.logging.JMSLogMessage;
@@ -18,8 +19,6 @@ import org.csstudio.logging.es.archivedjmslog.LogMessage;
 import org.eclipse.ui.views.properties.IPropertyDescriptor;
 import org.eclipse.ui.views.properties.IPropertySource;
 import org.eclipse.ui.views.properties.PropertyDescriptor;
-import org.json.JSONException;
-import org.json.JSONObject;
 
 public class EventLogMessage extends LogMessage
 {
@@ -52,24 +51,24 @@ public class EventLogMessage extends LogMessage
             "CLASS", "USER", "HOST", "APPLICATION-ID", "SEVERITY" };
 
     @SuppressWarnings("nls")
-    public static EventLogMessage fromElasticsearch(JSONObject json)
+    public static EventLogMessage fromElasticsearch(JsonObject json)
     {
-        try
+        EventLogMessage msg = new EventLogMessage();
+        JsonObject source = json.getJsonObject("_source");
+        for (String name : EventLogMessage.PROPERTY_NAMES)
         {
-            EventLogMessage msg = new EventLogMessage();
-            JSONObject source = json.getJSONObject("_source");
-            for (String name : EventLogMessage.PROPERTY_NAMES)
+            try
             {
                 msg.properties.put(name, source.getString(name));
             }
-            msg.properties.put("ID", json.getString("_id"));
-            msg.verify();
-            return msg;
+            catch (NullPointerException ex)
+            {
+                // ignore, will be handled by verify().
+            }
         }
-        catch (JSONException ex)
-        {
-            return null;
-        }
+        msg.properties.put("ID", json.getString("_id"));
+        msg.verify();
+        return msg;
     }
 
     public static EventLogMessage fromJMS(MapMessage message)

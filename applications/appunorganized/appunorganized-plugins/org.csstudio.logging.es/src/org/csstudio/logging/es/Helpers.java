@@ -4,6 +4,9 @@ import java.text.SimpleDateFormat;
 import java.time.Instant;
 import java.util.logging.Level;
 
+import javax.json.Json;
+import javax.json.JsonObjectBuilder;
+
 import org.csstudio.logging.JMSLogMessage;
 import org.csstudio.logging.es.archivedjmslog.ElasticsearchModel;
 import org.csstudio.logging.es.archivedjmslog.JMSReceiver;
@@ -15,8 +18,6 @@ import org.csstudio.security.preferences.SecurePreferences;
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.core.runtime.preferences.IPreferencesService;
 import org.eclipse.swt.widgets.Shell;
-import org.json.JSONException;
-import org.json.JSONObject;
 
 public class Helpers
 {
@@ -54,16 +55,15 @@ public class Helpers
             {
                 @SuppressWarnings("nls")
                 @Override
-                protected JSONObject getTimeQuery(Instant from, Instant to)
-                        throws JSONException
+                protected JsonObjectBuilder getTimeQuery(Instant from, Instant to)
                 {
                     SimpleDateFormat df = new SimpleDateFormat(
                             JMSLogMessage.DATE_FORMAT);
-                    JSONObject timematch = new JSONObject();
-                    timematch.put("gte", df.format(from.toEpochMilli()));
-                    timematch.put("lte", df.format(to.toEpochMilli()));
-                    return new JSONObject().put("range",
-                            new JSONObject().put(this.dateField, timematch));
+                    var timematch = Json.createObjectBuilder();
+                    timematch.add("gte", df.format(from.toEpochMilli()));
+                    timematch.add("lte", df.format(to.toEpochMilli()));
+                    return Json.createObjectBuilder().add("range",
+                            Json.createObjectBuilder().add(this.dateField, timematch));
                 }
 
                 @Override

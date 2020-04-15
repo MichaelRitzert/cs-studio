@@ -25,12 +25,6 @@
       </page>
    </extension>
    <extension
-         point="org.eclipse.help.toc">
-      <toc
-            file="toc.xml">
-      </toc>
-   </extension>
-   <extension
          point="org.csstudio.opibuilder.widget">
       <widget
             category="Others"

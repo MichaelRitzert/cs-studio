@@ -3,21 +3,24 @@ package org.csstudio.utility.esclient;
 import java.util.function.Function;
 import java.util.logging.Logger;
 
-import javax.ws.rs.core.MediaType;
+import java.io.IOException;
+import java.io.StringReader;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpRequest.BodyPublishers;
+import java.net.http.HttpResponse.BodyHandlers;
 
-import org.json.JSONArray;
-import org.json.JSONException;
-import org.json.JSONObject;
-
-import com.sun.jersey.api.client.Client;
-import com.sun.jersey.api.client.ClientResponse;
-import com.sun.jersey.api.client.WebResource;
-import com.sun.jersey.api.client.ClientResponse.Status;
+import javax.json.Json;
+import javax.json.JsonArray;
+import javax.json.JsonObject;
+import javax.json.JsonObjectBuilder;
+import javax.json.stream.JsonParsingException;
 
 /**
  * Synchronous client to post a query to an Elasticsearch server.
  *
- * The query is passed in as a {@link JSONObject}. The results are returned one
+ * The query is passed in as a {@link JsonObject}. The results are returned one
  * by one to the provided callback function
  * {@link ElasticsearchClient#dataConsumer}.
  *
@@ -65,18 +68,15 @@ public class ElasticsearchClient
     protected static final String SEARCH_URL = "/_search"; //$NON-NLS-1$
 
     /**
-     * The {@link Client} to use for HTTP(S) requests.
-     *
-     * If this is {@code null}, the default
-     * {@link com.sun.jersey.api.client.Client#create()} is used.
+     * The {@link HttpClient} to use for HTTP(S) requests.
      */
-    protected Client client = null;
+    protected HttpClient client = HttpClient.newHttpClient();
 
     /** The function handling incoming results. */
-    protected final Function<JSONObject, Boolean> dataConsumer;
+    protected final Function<JsonObject, Boolean> dataConsumer;
 
     /** The function receiving the full response. */
-    protected Function<JSONObject, Boolean> responseConsumer = null;
+    protected Function<JsonObject, Boolean> responseConsumer = null;
 
     /** The active {@link ScrollSettings}. */
     protected ScrollSettings scrollSettings;
@@ -93,7 +93,7 @@ public class ElasticsearchClient
      *            The callback function for results.
      */
     public ElasticsearchClient(String server,
-            Function<JSONObject, Boolean> dataConsumer)
+            Function<JsonObject, Boolean> dataConsumer)
     {
         if ((null == server) || server.isEmpty())
         {
@@ -122,9 +122,12 @@ public class ElasticsearchClient
         }
         try
         {
-            JSONObject clear = new JSONObject().put(QUERY_SCROLL_ID, scrollId);
+            JsonObject clear = Json.createObjectBuilder()
+                    .add(QUERY_SCROLL_ID, scrollId).build();
             performQuery(SCROLL_URL, builder -> {
-                return builder.delete(ClientResponse.class, clear.toString());
+                return builder.header("Content-Type", "application/json")
+                        .method("DELETE", HttpRequest.BodyPublishers
+                                .ofString(clear.toString()));
             });
         }
         catch (Throwable e)
@@ -146,7 +149,7 @@ public class ElasticsearchClient
      *            "https://www.elastic.co/guide/en/elasticsearch/reference/current/query-dsl.html">Query
      *            DSL</a> form.
      */
-    public void executeQuery(String index, JSONObject query)
+    public void executeQuery(String index, JsonObject query)
     {
         if ((null == index) || index.isEmpty())
         {
@@ -158,50 +161,38 @@ public class ElasticsearchClient
         }
 
         // first query
-        JSONObject scrollRequest = query;
+        JsonObject scrollRequest = query;
         // TODO: properly encode all this
         String uri = "/" + index + SEARCH_URL; //$NON-NLS-1$
         if (null != this.scrollSettings)
         {
-            if (null != query.remove(QUERY_PAGE_SIZE_FIELD))
+            if (null != query.getJsonString(QUERY_PAGE_SIZE_FIELD))
             {
                 LOGGER.warning(
-                        String.format("Removed user-provided '%s' field.", //$NON-NLS-1$
+                        String.format("Removing user-provided '%s' field.", //$NON-NLS-1$
                                 QUERY_PAGE_SIZE_FIELD));
             }
-            try
-            {
-                query.put(QUERY_PAGE_SIZE_FIELD,
-                        this.scrollSettings.getPageSize());
-                uri += SCROLL_URL_PARAMETER + this.scrollSettings.getTimeout();
-            }
-            catch (JSONException e)
-            {
-                throw new RuntimeException(e.getMessage());
-            }
+            JsonObjectBuilder builder = Json.createObjectBuilder(query);
+            builder.add(QUERY_PAGE_SIZE_FIELD,
+                    this.scrollSettings.getPageSize());
+            uri += SCROLL_URL_PARAMETER + this.scrollSettings.getTimeout();
+            scrollRequest = builder.build();
         }
 
-        try
+        do
         {
-            do
-            {
-                String body = scrollRequest.toString();
-                // perform the HTTP request
-                JSONObject result = performQuery(uri, builder -> {
-                    return builder.post(ClientResponse.class, body);
-                });
+            String body = scrollRequest.toString();
+            // perform the HTTP request
+            JsonObject result = performQuery(uri, builder -> {
+                return builder.POST(BodyPublishers.ofString(body));
+            });
 
-                // all following requests go to this URL with the scroll id as
-                // returned by handleResponse.
-                scrollRequest = handleResponse(result);
-                uri = SCROLL_URL;
-            }
-            while (null != scrollRequest);
+            // all following requests go to this URL with the scroll id as
+            // returned by handleResponse.
+            scrollRequest = handleResponse(result);
+            uri = SCROLL_URL;
         }
-        catch (JSONException e)
-        {
-            throw new RuntimeException(e.getMessage());
-        }
+        while (null != scrollRequest);
     }
 
     /**
@@ -216,14 +207,14 @@ public class ElasticsearchClient
      * @return If != null, use this String to perform the next query.
      * @throws JSONException
      */
-    protected JSONObject handleResponse(JSONObject result) throws JSONException
+    protected JsonObject handleResponse(JsonObject result)
     {
         // default: no scrolling ⇒ no next request
-        JSONObject ret = null;
+        JsonObject ret = null;
         String scrollId = null;
         // if we use scrolling, a _scroll_id is present and this has to be
         // passed in the next request.
-        if (result.has(RESPONSE_SCROLL_ID))
+        if (result.containsKey(RESPONSE_SCROLL_ID))
         {
             if (null == this.scrollSettings)
             {
@@ -232,10 +223,10 @@ public class ElasticsearchClient
                         "Scrolling result received, but scrolling not configured."); //$NON-NLS-1$
             }
             scrollId = result.getString(RESPONSE_SCROLL_ID);
-            ret = new JSONObject()
-                    .put(QUERY_SCROLL_PARAMETER,
+            ret = Json.createObjectBuilder()
+                    .add(QUERY_SCROLL_PARAMETER,
                             this.scrollSettings.getTimeout())
-                    .put(QUERY_SCROLL_ID, scrollId);
+                    .add(QUERY_SCROLL_ID, scrollId).build();
         }
 
         synchronized (this)
@@ -253,9 +244,9 @@ public class ElasticsearchClient
             }
         }
 
-        final JSONArray array = result.getJSONObject(RESPONSE_HITS_FIELD)
-                .getJSONArray(RESPONSE_HITS_ARRAY);
-        final int count = array.length();
+        final JsonArray array = result.getJsonObject(RESPONSE_HITS_FIELD)
+                .getJsonArray(RESPONSE_HITS_ARRAY);
+        final int count = array.size();
         if (0 == count)
         {
             // from the documentation
@@ -271,7 +262,7 @@ public class ElasticsearchClient
         }
         for (int i = 0; i < count; ++i)
         {
-            JSONObject msg = array.getJSONObject(i);
+            JsonObject msg = array.getJsonObject(i);
             Boolean cont = this.dataConsumer.apply(msg);
             if ((null == cont) || (!cont))
             {
@@ -294,73 +285,62 @@ public class ElasticsearchClient
      * @return The JSON data returned by Elasticsearch.
      * @throws RuntimeException
      */
-    JSONObject performQuery(String uri,
-            Function<WebResource.Builder, ClientResponse> method)
+    JsonObject performQuery(String uri,
+            Function<HttpRequest.Builder, HttpRequest.Builder> method)
             throws RuntimeException
     {
-        // check, if the user configured a special client.
-        Client c = null;
-        boolean destroyClient = false;
-        synchronized (this)
-        {
-            if (null != this.client)
-            {
-                c = this.client;
-            }
-            else
-            {
-                c = Client.create();
-                destroyClient = true;
-            }
-        }
-
         try
         {
             // perform the HTTP request
-            WebResource.Builder builder = c.resource(this.server + uri)
-                    .type(MediaType.APPLICATION_JSON)
-                    .accept(MediaType.APPLICATION_JSON);
-            ClientResponse response = method.apply(builder);
-            if (Status.OK != Status.fromStatusCode(response.getStatus()))
+            var builder = HttpRequest.newBuilder()
+                    .uri(URI.create(this.server + uri));
+            builder = method.apply(builder);
+            var response = this.client.send(builder.build(),
+                    BodyHandlers.ofString());
+            if (200 != response.statusCode())
             {
-                LOGGER.warning(response.getEntity(String.class));
+                LOGGER.warning(response.body());
                 throw new RuntimeException(response.toString());
             }
-            return new JSONObject(response.getEntity(String.class));
+            var reader = Json.createReader(new StringReader(response.body()));
+            return reader.readObject();
         }
-        catch (JSONException e)
+        catch (JsonParsingException e)
         {
             e.printStackTrace();
             throw new RuntimeException(e.getMessage());
         }
-        finally
+        catch (IOException e)
         {
-            if (destroyClient)
-            {
-                c.destroy();
-            }
+            e.printStackTrace();
+            throw new RuntimeException(e.getMessage());
+        }
+        catch (InterruptedException e)
+        {
+            e.printStackTrace();
+            throw new RuntimeException(e.getMessage());
         }
     }
 
     /**
-     * Set the {@link Client} to use for HTTP(S) requests to the server.
+     * Set the {@link HttpClient} to use for HTTP(S) requests to the server.
      *
-     * Use this method if the default {@link Client} configuration is not
+     * Use this method if the default {@link HttpClient} configuration is not
      * suitable, e.g. because a proxy needs to be used, or an HTTP/2 connection
      * can be shared.
      *
      * This class does not take ownership.
      *
      * @param client
-     *            The {@link Client} to use. {@code null} to revert to the
-     *            default {@code Client.create()}.
+     *            The {@link HttpClient} to use.
      */
-    public void setClient(Client client)
+    public void setClient(HttpClient client)
     {
-        synchronized (this)
+        if (null == this.client)
         {
-            this.client = client;
+            throw new RuntimeException("client must not be null.");
         }
+        this.client = client;
     }
 
     /**
@@ -379,7 +359,7 @@ public class ElasticsearchClient
      *            The function to set.
      */
     public void setResponseConsumer(
-            Function<JSONObject, Boolean> responseConsumer)
+            Function<JsonObject, Boolean> responseConsumer)
     {
         synchronized (this)
         {

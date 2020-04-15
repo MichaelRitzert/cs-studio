@@ -11,7 +11,6 @@ Require-Bundle: org.eclipse.jface,
  org.eclipse.gef,
  org.eclipse.ui,
  org.eclipse.ui.views,
- com.sun.jersey.bundle,
  org.csstudio.ui.util,
  org.csstudio.apputil,
  org.csstudio.apputil.ui,
@@ -21,14 +20,14 @@ Require-Bundle: org.eclipse.jface,
  org.csstudio.utility.singlesource
 Bundle-ActivationPolicy: lazy
 Bundle-Activator: org.csstudio.logging.es.Activator
-Bundle-RequiredExecutionEnvironment: JavaSE-1.8
+Bundle-RequiredExecutionEnvironment: JavaSE-11
 Automatic-Module-Name: org.csstudio.logging.es
-Import-Package: javax.ws.rs.core,
- org.csstudio.logging,
+Import-Package: org.csstudio.logging,
  org.csstudio.opibuilder.widgets.figures,
  org.csstudio.platform.utility.jms,
- org.csstudio.utility.esclient;version="[1.0.0,2.0.0)",
- org.json
+ org.csstudio.utility.esclient;version="[2.0.0,3.0.0)",
+ javax.json;bundle-version="1.1.0",
+ org.glassfish.json.api;bundle-version="1.1.0"
 Export-Package: org.csstudio.logging.es;version="1.0.0",
  org.csstudio.logging.es.model;version="1.0.0",
  org.csstudio.logging.es.util;version="1.0.0"
