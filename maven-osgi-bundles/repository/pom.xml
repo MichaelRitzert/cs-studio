@@ -348,6 +348,14 @@
                     <Bundle-Version>1.5.8.css1</Bundle-Version>
                   </instructions>
                 </artifact>
+                <artifact>
+                  <id>javax.json:javax.json-api:1.1.4</id>
+                  <source>true</source>
+                </artifact>
+                <artifact>
+                  <id>org.glassfish:javax.json:1.1.4</id>
+                  <source>true</source>
+                </artifact>
 
 
                 <!-- DIIRT libraries -->
